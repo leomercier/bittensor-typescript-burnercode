@@ -1,4 +1,4 @@
-# Burner SN121 Vote-0
+# Burner SN121 Vote-0 (WORD IN PROGRESS)
 
 A tiny Node/Bun script that gives **100% weight to UID=0** on **Bittensor subnet 121**.
 It supports both **Direct `setWeights`** and **Commit/Reveal (CRv1)**, auto-detects on-chain hyperparameters via `btApi.query.subtensorModule`, and runs every **1 minute**.
