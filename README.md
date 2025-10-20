@@ -1,216 +1,208 @@
-# Burner SN121 Vote-0 (WORK IN PROGRESS)
+# Bittensor TypeScript Weight Setting Tool
 
-A tiny Node/Bun script that gives **100% weight to UID=0** on **Bittensor subnet 121**.
-It supports both **Direct `setWeights`** and **Commit/Reveal (CRv1)**, auto-detects on-chain hyperparameters via `btApi.query.subtensorModule`, and runs every **1 minute**.
-
----
+A TypeScript-based tool for setting weights on Bittensor subnets with advanced Drand timelock encryption support.
 
 ## Features
 
-- Subnet **121** by default (override with `NETUID`).
-- Chooses **Direct** or **CR** mode (`WEIGHTS_MODE=AUTO|DIRECT|CR`).
-- Reads on-chain hyperparams (via storage):
+- **Drand Timelock Encryption**: Implements commit-reveal schemes using Drand's distributed randomness beacon
+- **Multiple Commit Methods**: Supports both CRv3 (`commitCrv3Weights`) and CRv4 (`commitTimelockedWeights`) extrinsics
+- **Automatic Mode Detection**: Intelligently switches between standard weight setting and commit-reveal based on subnet configuration
+- **Rate Limiting**: Respects subnet weight setting rate limits to prevent transaction failures
+- **Continuous Operation**: Runs in a continuous loop with proper timing and error handling
+- **Comprehensive Logging**: Detailed debug logging with structured JSON output
+- **Docker Support**: Includes containerization for easy deployment
 
-  - `tempo` → epoch length in blocks
-  - `revealPeriodEpochs` → commit→reveal gap (epochs)
-  - `weightsSetRateLimit` → commit cooldown (blocks)
-  - `weightsVersionKey` → version key
-
-- Persists **pending commit** to disk; reveals in the **correct epoch**.
-- Respect **commit rate limit** to avoid `CommittingWeightsTooFast`.
-- JSON debug logs for **commit** and **reveal** tuples.
-
----
-
-## Requirements
-
-- Node 18+ or Bun.
-- WS-capable runtime (`ws` is installed by Polkadot API).
-
-Install deps:
+## Installation
 
 ```bash
-# npm
-npm i @polkadot/api @polkadot/keyring @polkadot/util-crypto @polkadot/util ws dotenv
+# Clone and install dependencies
+npm install
 
-# or bun
-bun add @polkadot/api @polkadot/keyring @polkadot/util-crypto @polkadot/util ws dotenv
+# Build the project
+npm run build
 ```
 
----
+## Configuration
 
-## Quick Start
+Create a `.env` file with the following required variables:
+
+```env
+# Bittensor Network Configuration
+BITTENSOR_NETWORK_URL=wss://entrypoint-finney.opentensor.ai:443
+BITTENSOR_SUBNET_ID=111
+VALIDATOR_SS58_ADDRESS=5GrwvaEF5zaeofjbwr9384fhleCtERHpNehXCPcNoHGKutQY
+VALIDATOR_SECRET_PHRASE=your_validator_mnemonic_here
+
+# Drand Configuration (for timelock encryption)
+DRAND_API_BASE_URL=https://api.drand.sh
+DRAND_CHAIN_HASH=52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
+DRAND_PUBLIC_KEY=83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4c4de8833e
+```
+
+### Environment Variables
+
+| Variable                  | Description                              | Required |
+| ------------------------- | ---------------------------------------- | -------- |
+| `BITTENSOR_NETWORK_URL`   | WebSocket endpoint for Bittensor network | Yes      |
+| `BITTENSOR_SUBNET_ID`     | Target subnet ID                         | Yes      |
+| `VALIDATOR_SS58_ADDRESS`  | Your validator's SS58 address            | Yes      |
+| `VALIDATOR_SECRET_PHRASE` | Your validator's mnemonic phrase         | Yes      |
+| `DRAND_API_BASE_URL`      | Drand API base URL                       | Yes      |
+| `DRAND_CHAIN_HASH`        | Drand chain hash for verification        | Yes      |
+| `DRAND_PUBLIC_KEY`        | Drand public key for verification        | Yes      |
+
+## Usage
+
+### Development
 
 ```bash
-# Auto mode (prefers setWeights; falls back to commit→reveal when required)
-WEIGHTS_MODE=AUTO \
-NETUID=121 \
-TARGET_UID=0 \
-node burner-sn121-vote0.js
+# Run in development mode
+npm start
 ```
 
-### Recommended for SN121 (typically CR + versionKey=0)
+### Docker Deployment
 
 ```bash
-WEIGHTS_MODE=CR \
-NETUID=121 \
-TARGET_UID=0 \
-VERSION_KEY=0 \
-node burner-sn121-vote0.js
+# Build the Docker image
+make package
+
+# Run with environment file
+make dev-env
 ```
 
-**Tip:** Provide your hotkey mnemonic:
+### Systemd Service
+
+The project includes systemd service configuration for production deployment:
 
 ```bash
-MNEMONIC="abandon abandon ... zoo" node burner-sn121-vote0.js
+# Copy service file
+sudo cp notes.txt /etc/systemd/system/burnercode.service
+
+# Enable and start service
+sudo systemctl enable burnercode
+sudo systemctl start burnercode
 ```
-
-If omitted, a **burner mnemonic** is generated and printed.
-
----
-
-## Environment Variables
-
-| Var                        | Default                                     | What it does                                                  |
-| -------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
-| `RPC_URL`                  | `wss://entrypoint-finney.opentensor.ai:443` | Node WS endpoint                                              |
-| `NETUID`                   | `121`                                       | Subnet ID                                                     |
-| `TARGET_UID`               | `0`                                         | The UID to weight 100%                                        |
-| `WEIGHTS_MODE`             | `AUTO`                                      | `AUTO`, `DIRECT` (setWeights only), `CR` (commit/reveal only) |
-| `MNEMONIC`                 | _(none)_                                    | Hotkey seed (sr25519)                                         |
-| `TEST_MODE`                | `false`                                     | If `true`, logs but **doesn’t send** txs                      |
-| `STATE_DIR`                | `.burner-state`                             | Local dir for pending/meta files                              |
-| `VERSION_KEY`              | _(none)_                                    | Override version key; else use on-chain `weightsVersionKey`   |
-| `EPOCH_LENGTH_BLOCKS`      | `101`                                       | Fallback epoch size if storage query fails                    |
-| `COMMIT_RATE_LIMIT_BLOCKS` | `100`                                       | Fallback rate limit if storage query fails                    |
-
----
 
 ## How It Works
 
-1. **Hyperparams refresh** (throttled ~5 min) via:
+### Weight Setting Modes
 
-   - `query.subtensorModule.tempo(NETUID)`
-   - `query.subtensorModule.commitRevealWeightsEnabled(NETUID)`
-   - `query.subtensorModule.revealPeriodEpochs(NETUID)`
-   - `query.subtensorModule.weightsSetRateLimit(NETUID)`
-   - `query.subtensorModule.weightsVersionKey(NETUID)`
+The tool automatically detects the subnet's configuration and chooses the appropriate method:
 
-2. **Every minute**:
+1. **Standard Mode**: Direct weight setting via `setWeights` extrinsic
+2. **Commit-Reveal Mode**: Uses Drand timelock encryption for privacy-preserving weight commits
 
-   - If **pending commit** exists, compute the **reveal epoch** (`commitEpoch + revealPeriodEpochs`) and:
+### Commit-Reveal Process
 
-     - if before: wait,
-     - if in: **reveal**; delete pending,
-     - if missed: re-commit new payload.
+1. **Weight Preparation**: Normalizes and prepares weight data
+2. **Timelock Encryption**: Encrypts weight data using Drand's future randomness
+3. **Commit Transaction**: Submits encrypted commitment to the blockchain
+4. **Automatic Reveal**: Blockchain automatically decrypts and applies weights when the Drand round is reached
 
-   - If no pending:
+### Rate Limiting
 
-     - Try **Direct `setWeights`** (unless `WEIGHTS_MODE=CR`).
-     - If rejected (CR enabled), **commit** and save pending.
-     - Respect **weightsSetRateLimit** between commits.
+The tool respects subnet-specific rate limits:
 
-3. **Commit/Reveal payload**:
+- Queries `weightsSetRateLimit` from the blockchain
+- Tracks last commit block numbers
+- Automatically waits for the required cooldown period
 
-   - We hash `(AccountId, u16, Vec<u16>, Vec<u16>, u64, Vec<u16>)`
-     → `(address, netuid, uids, weights, versionKey, salt)` using `blake2_256`.
-   - On reveal, we **recompute** the hash to debug `CommitNotFound`.
+## API Reference
 
-**State files** (in `STATE_DIR`):
+### SubnetWeights Class
 
-- `pending_<address>_<netuid>.json` — saved commit (uids, weights, salt, versionKey, commitBlock, commitHash).
-- `meta_<address>_<netuid>.json` — `lastCommitBlock`, `lastCommitHash` to enforce cooldown.
+The main class providing weight setting functionality:
 
----
+```typescript
+const config: SubnetWeightsConfig = {
+    subnetConnection: {
+        networkUrl: 'wss://entrypoint-finney.opentensor.ai:443',
+        subnetId: 121,
+        ss58Address: '5GrwvaEF...',
+        secretPhrase: 'first second ...'
+    },
+    drand: {
+        apiBaseUrl: 'https://api.drand.sh',
+        chainHash: '52db9ba70e0cc0f6eaf...',
+        publicKey: '83cf0f2896adee7eb8b5f...'
+    }
+};
 
-## Logs & Debug
+const subnetWeights = new SubnetWeights(config);
 
-You will see entries like:
+// Set weights once
+await subnetWeights.setWeights([0, 1, 2], [0.5, 0.3, 0.2]);
 
-```text
-[hp] tempo (epoch length) = 101 blocks
-[hp] revealPeriodEpochs = 1 epoch(s)
-[hp] weightsSetRateLimit = 100 blocks
-[hp] weightsVersionKey = 0
+// Continuous weight setting
+await subnetWeights.continuousWeightSetting(async () => {
+    return { uids: [0], weights: [1.0] };
+});
 ```
 
-Commit tuple (JSON):
+### Key Methods
 
-```json
-[commit:debug] {
-  "address": "5F...",
-  "netuid": 121,
-  "uids": [0],
-  "values": [65535],
-  "versionKey": "0",
-  "salt_u16_len": 32,
-  "commitHash": "0x..."
-}
-```
+- `setWeights(uids: number[], weights: number[])`: Set weights for specified UIDs
+- `continuousWeightSetting(callback)`: Run continuous weight setting loop
+- `disconnect()`: Clean up API connections
 
-Reveal tuple (JSON):
+## Logging
 
-```json
-[reveal:debug] {
-  "address": "5F...",
-  "netuid": 121,
-  "uids": [0],
-  "values": [65535],
-  "versionKey": "0",
-  "salt_u16_len": 32,
-  "recomputedCommitHash": "0x...",
-  "pendingCommitHash": "0x..."
-}
-```
-
----
-
-## Troubleshooting
-
-- **`Invalid Transaction: Custom error: 1`**
-  Usually means **Direct setWeights** on a CR-enabled subnet. Use `WEIGHTS_MODE=CR` or keep `AUTO`.
-
-- **`Custom error: 16 (CommitNotFound)`** at reveal
-
-  - Wrong reveal epoch: script now waits until **exact epoch** (`commitEpoch + revealPeriodEpochs`).
-  - Mismatched payload: check `commit:debug` vs `reveal:debug`. Ensure `versionKey` is correct (SN121 often `0`).
-  - Stale pending: delete `pending_*.json`.
-
-- **`CommittingWeightsTooFast`**
-  Respect `weightsSetRateLimit`. The script remembers `lastCommitBlock` and waits:
-
-  ```
-  [tick] Commit cooldown: 37/100 blocks since last commit — skipping commit this tick.
-  ```
-
-- **Stuck at `Waiting for reveal epoch`**
-  Normal. It only reveals in **commitEpoch + revealPeriodEpochs**, not “any time after”.
-
-- **Reset state**
-
-  ```bash
-  rm -f .burner-state/pending_*_121.json .burner-state/meta_*_121.json
-  ```
-
----
-
-## Running with Bun
+The tool provides comprehensive logging with different levels:
 
 ```bash
-bun run index.ts
+# Debug output shows:
+Current State:
+  - Current Block: 3141592
+  - Last Commit Block: 3141492
+  - Blocks Since Last Commit: 100
+
+Subnet Configuration:
+  - Tempo: 360 blocks (~72 min)
+  - Weights Rate Limit: 100 blocks (~20 min)
+  - Commit-Reveal: Enabled
+
+Weight commit successful!
+   Transaction: 0x1234abcd...
+   Next commit available after block: 3141692
 ```
 
-Same env vars apply. Bun’s printf can be quirky; this script uses **JSON** logs for reliability.
+## Error Handling
 
----
+Common errors and solutions:
 
-## Security
+- **Rate Limiting**: Tool automatically waits for the required cooldown period
+- **Network Issues**: Implements retry logic with exponential backoff
+- **Invalid Configuration**: Validates all required parameters at startup
+- **Commit-Reveal Errors**: Provides detailed debugging information for troubleshooting
 
-- **Never** commit your mnemonic. Prefer environment variables or a secure secret store.
-- This script signs transactions locally; keep the host secure.
+## Security Considerations
 
----
+- **Private Keys**: Never commit mnemonics to version control
+- **Environment Variables**: Use secure methods to provide sensitive configuration
+- **Network Security**: Ensure secure connections to Bittensor network endpoints
+- **Docker Security**: Run containers with appropriate security contexts
+
+## Development
+
+### Building
+
+```bash
+# Compile TypeScript
+npm run build
+
+# Run compiled JavaScript
+node dist/index.js
+```
 
 ## License
 
-MIT — do whatever you like, no warranty.
+MIT License - see LICENSE file for details.
+
+## Support
+
+For issues and questions:
+
+- Check the logs for detailed error information
+- Ensure all environment variables are correctly set
+- Verify network connectivity to Bittensor and Drand endpoints
+- Review subnet-specific configuration requirements
