@@ -1,0 +1,24 @@
+/etc/systemd/system/burnercode.service
+
+[Unit]
+Description=Burnercode Docker Container
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=5
+
+# Stop the container if it's already running, then start it
+ExecStartPre=-/usr/bin/docker stop burnercode
+ExecStartPre=-/usr/bin/docker rm burnercode
+
+# Start the container
+ExecStart=/usr/bin/docker run --name burnercode -v /path-to-env/.env:/usr/src/app/.env bittensor-burnercode
+
+# Stop the container on service stop
+ExecStop=/usr/bin/docker stop burnercode
+ExecStopPost=/usr/bin/docker rm burnercode
+
+[Install]
+WantedBy=multi-user.target
